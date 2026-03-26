@@ -1,0 +1,64 @@
+{
+  "name": "@mustafakurtt/bun-sockets",
+  "version": "0.1.0",
+  "description": "Bun-native WebSocket server with type-safe events, rooms, middleware, and zero dependencies. The Socket.io DX you love, powered by Bun's native speed.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "bun",
+    "websocket",
+    "socket",
+    "realtime",
+    "rooms",
+    "type-safe",
+    "middleware",
+    "pub-sub",
+    "broadcast",
+    "zero-dependency",
+    "bun-native"
+  ],
+  "author": "Mustafa Kurt",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mustafakurtt/bun-sockets"
+  },
+  "bugs": {
+    "url": "https://github.com/mustafakurtt/bun-sockets/issues"
+  },
+  "homepage": "https://github.com/mustafakurtt/bun-sockets#readme",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.8.2",
+    "bun-types": "latest"
+  }
+}
