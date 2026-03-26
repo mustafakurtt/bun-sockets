@@ -62,6 +62,17 @@ export interface BunSocketServer<
 
   history(room: string, query?: HistoryQuery): HistoryEntry[] | Promise<HistoryEntry[]>
 
+  of<CE extends EventMap, SE extends EventMap>(path: string): {
+    on(event: 'connection', handler: ConnectionHandler<CE, SE>): any
+    on(event: 'disconnect', handler: DisconnectHandler<CE, SE>): any
+    use(middleware: MiddlewareFn): any
+    to(room: string): RoomEmitter<SE>
+    history(room: string, query?: HistoryQuery): HistoryEntry[] | Promise<HistoryEntry[]>
+    readonly rooms: ReadonlyMap<string, ReadonlySet<string>>
+    readonly sockets: ReadonlyMap<string, BunSocket<CE, SE>>
+    readonly connectionCount: number
+  }
+
   readonly rooms: ReadonlyMap<string, ReadonlySet<string>>
   readonly sockets: ReadonlyMap<string, BunSocket<ClientEvents, ServerEvents>>
   readonly connectionCount: number

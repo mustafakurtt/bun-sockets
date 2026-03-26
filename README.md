@@ -404,6 +404,80 @@ class RedisAdapter implements HistoryAdapter {
 }
 ```
 
+### Namespaces
+
+Namespaces let you split logic across multiple endpoints on the same server. Each namespace has its own connection handlers, middleware, rooms, and sockets.
+
+```typescript
+const io = createServer({ heartbeat: false })
+
+// Create namespaces
+const chat = io.of('/chat')
+const admin = io.of('/admin')
+
+// Each namespace has independent handlers
+chat.on('connection', (socket) => {
+  socket.join('general')
+  socket.on('message', (payload) => {
+    socket.broadcast('general', 'message', payload)
+  })
+})
+
+admin.use((req, next) => {
+  const token = new URL(req.url).searchParams.get('token')
+  if (token === 'secret') next({ role: 'admin' })
+  else throw new Error('Unauthorized')
+})
+
+admin.on('connection', (socket) => {
+  console.log('Admin connected:', socket.data.role)
+})
+```
+
+**Client connects to a namespace by setting `path`:**
+
+```typescript
+const chatClient = createClient({ url: 'ws://localhost:3000', path: '/chat' })
+const adminClient = createClient({ url: 'ws://localhost:3000', path: '/admin' })
+```
+
+**Namespace API** — same as server: `on`, `use`, `to`, `rooms`, `sockets`, `connectionCount`, `history`.
+
+### Binary Messages
+
+Send and receive raw binary data (ArrayBuffer / Uint8Array) alongside JSON events. Zero-copy wire format — no base64 overhead.
+
+**Server side:**
+
+```typescript
+io.on('connection', (socket) => {
+  // Send binary to client
+  const pixels = new Uint8Array([255, 0, 0, 255, 0, 255])
+  socket.emitBinary('frame', pixels)
+
+  // Receive binary from client
+  socket.onBinary('upload', (data: ArrayBuffer) => {
+    console.log('Received', data.byteLength, 'bytes')
+  })
+})
+```
+
+**Client side:**
+
+```typescript
+const client = createClient({ url: 'ws://localhost:3000' })
+
+// Send binary to server
+client.emitBinary('upload', new Uint8Array([1, 2, 3]))
+
+// Receive binary from server
+client.onBinary('frame', (data: ArrayBuffer) => {
+  const pixels = new Uint8Array(data)
+})
+```
+
+**Wire format:** `[0x01][2-byte event length][event name][binary payload]` — efficient, no JSON encoding for binary data.
+
 ## Client Options
 
 ```typescript
@@ -559,8 +633,8 @@ ws.send(JSON.stringify({ event: 'chat_message', payload: { text: 'Hello!' } }))
 - [x] ~~Heartbeat / ping-pong~~ — zombie socket detection and cleanup ✅
 - [x] ~~Connection State Recovery~~ — replay missed messages after reconnect ✅
 - [x] ~~History adapters (Memory + bun:sqlite)~~ — room message history with pagination ✅
-- [ ] Namespace support — multiple endpoints on one server
-- [ ] Binary message support — ArrayBuffer / Uint8Array
+- [x] ~~Namespace support~~ — multiple endpoints on one server ✅
+- [x] ~~Binary message support~~ — ArrayBuffer / Uint8Array, zero-copy wire format ✅
 
 ## License
 

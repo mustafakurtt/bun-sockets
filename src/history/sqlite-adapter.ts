@@ -11,6 +11,7 @@ const DEFAULT_MAX_PER_ROOM = 10000
 export class SqliteAdapter implements HistoryAdapter {
   private readonly db: Database
   private readonly maxPerRoom: number
+  private readonly insertStmt: ReturnType<Database['prepare']>
 
   constructor(options: SqliteAdapterOptions = {}) {
     this.maxPerRoom = options.maxPerRoom ?? DEFAULT_MAX_PER_ROOM
@@ -38,13 +39,14 @@ export class SqliteAdapter implements HistoryAdapter {
       CREATE INDEX IF NOT EXISTS idx_history_room_event
       ON history (room, event, timestamp)
     `)
+
+    this.insertStmt = this.db.prepare(
+      'INSERT INTO history (id, room, event, payload, timestamp) VALUES (?, ?, ?, ?, ?)',
+    )
   }
 
   store(room: string, event: string, payload: unknown): void {
-    const stmt = this.db.prepare(
-      'INSERT INTO history (id, room, event, payload, timestamp) VALUES (?, ?, ?, ?, ?)',
-    )
-    stmt.run(crypto.randomUUID(), room, event, JSON.stringify(payload), Date.now())
+    this.insertStmt.run(crypto.randomUUID(), room, event, JSON.stringify(payload), Date.now())
 
     this.enforceLimit(room)
   }

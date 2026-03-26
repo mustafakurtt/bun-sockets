@@ -1,14 +1,8 @@
 import type { Server } from 'bun'
 import type { EventMap, EventHandler } from '../types/events.types.ts'
-import type { BunSocket, NativeWebSocket, InternalSocketData } from '../types/socket.types.ts'
+import type { BunSocket, NativeWebSocket, InternalSocketData, RecoveryMessage } from '../types/socket.types.ts'
 import type { HistoryAdapter } from '../types/history.types.ts'
-
-interface RecoveryMessage {
-  seq: number
-  event: string
-  payload: unknown
-  timestamp: number
-}
+import { encodeBinaryFrame } from './binary.ts'
 
 export class SocketWrapper<
   ClientEvents extends EventMap = EventMap,
@@ -19,6 +13,7 @@ export class SocketWrapper<
   private readonly roomRegistry: Map<string, Set<string>>
   private readonly recoveryBuffers: Map<string, RecoveryMessage[]> | null
   private readonly historyAdapter: HistoryAdapter | null
+  private readonly maxBufferSize: number
 
   constructor(
     ws: NativeWebSocket,
@@ -26,12 +21,14 @@ export class SocketWrapper<
     roomRegistry: Map<string, Set<string>>,
     recoveryBuffers: Map<string, RecoveryMessage[]> | null = null,
     historyAdapter: HistoryAdapter | null = null,
+    maxBufferSize = 100,
   ) {
     this.ws = ws
     this.server = server
     this.roomRegistry = roomRegistry
     this.recoveryBuffers = recoveryBuffers
     this.historyAdapter = historyAdapter
+    this.maxBufferSize = maxBufferSize
   }
 
   get id(): string {
@@ -104,6 +101,9 @@ export class SocketWrapper<
       const buffer = this.recoveryBuffers.get(this.ws.data.id)
       if (buffer) {
         buffer.push({ seq, event, payload, timestamp: Date.now() })
+        if (buffer.length > this.maxBufferSize) {
+          buffer.splice(0, buffer.length - this.maxBufferSize)
+        }
       }
     }
 
@@ -127,9 +127,19 @@ export class SocketWrapper<
     this.server.publish(room, message)
 
     if (this.historyAdapter) {
-      this.historyAdapter.store(room, event, payload)
+      try { this.historyAdapter.store(room, event, payload) } catch { /* history store failed — non-fatal */ }
     }
 
+    return this
+  }
+
+  emitBinary(event: string, data: ArrayBuffer | Uint8Array): this {
+    this.ws.send(encodeBinaryFrame(event, data))
+    return this
+  }
+
+  onBinary(event: string, handler: (data: ArrayBuffer) => void | Promise<void>): this {
+    this.ws.data.binaryHandlers.set(event, handler)
     return this
   }
 

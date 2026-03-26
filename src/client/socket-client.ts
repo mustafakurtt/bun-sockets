@@ -1,4 +1,5 @@
 import type { EventMap, EventHandler } from '../types/events.types.ts'
+import { encodeBinaryFrame } from '../core/binary.ts'
 import type {
   ClientOptions,
   ResolvedClientOptions,
@@ -36,6 +37,7 @@ function resolveOptions(options: ClientOptions): ResolvedClientOptions {
     protocols: options.protocols ?? [],
     bufferMessages: options.bufferMessages ?? true,
     maxBufferSize: options.maxBufferSize ?? 100,
+    staleTimeout: options.staleTimeout ?? 70000,
   }
 }
 
@@ -51,6 +53,7 @@ export class SocketClient<
   private intentionalClose = false
 
   private readonly eventHandlers: Map<string, Set<EventHandler>> = new Map()
+  private readonly binaryHandlers: Map<string, (data: ArrayBuffer) => void | Promise<void>> = new Map()
   private readonly buffer: BufferedMessage[] = []
   private readonly lifecycle: LifecycleHandlers = {
     connect: new Set(),
@@ -118,6 +121,18 @@ export class SocketClient<
       this.addToBuffer(event, payload)
     }
 
+    return this
+  }
+
+  emitBinary(event: string, data: ArrayBuffer | Uint8Array): this {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(encodeBinaryFrame(event, data))
+    }
+    return this
+  }
+
+  onBinary(event: string, handler: (data: ArrayBuffer) => void | Promise<void>): this {
+    this.binaryHandlers.set(event, handler)
     return this
   }
 
@@ -217,7 +232,24 @@ export class SocketClient<
       this.flushBuffer()
     }
 
+    this.ws.binaryType = 'arraybuffer'
+
     this.ws.onmessage = (event: MessageEvent) => {
+      // Binary message
+      if (event.data instanceof ArrayBuffer) {
+        const bytes = new Uint8Array(event.data)
+        if (bytes.length >= 3 && bytes[0] === 0x01) {
+          const eventLen = (bytes[1]! << 8) | bytes[2]!
+          if (bytes.length >= 3 + eventLen) {
+            const eventName = new TextDecoder().decode(bytes.slice(3, 3 + eventLen))
+            const binaryPayload = bytes.slice(3 + eventLen).buffer
+            const handler = this.binaryHandlers.get(eventName)
+            if (handler) handler(binaryPayload)
+          }
+        }
+        return
+      }
+
       try {
         const data = JSON.parse(event.data as string) as { event: string; payload: unknown; seq?: number }
 
@@ -381,7 +413,7 @@ export class SocketClient<
       if (this.connected && !this.intentionalClose) {
         this.ws?.close(4001, 'stale connection')
       }
-    }, 70000)
+    }, this.options.staleTimeout)
   }
 
   private clearStaleTimer(): void {

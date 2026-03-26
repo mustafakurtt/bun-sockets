@@ -12,6 +12,7 @@ export function createServer<
 // Core classes
 export { SocketServer } from './core/socket-server.ts'
 export { SocketWrapper } from './core/socket-wrapper.ts'
+export { Namespace } from './core/namespace.ts'
 
 // Types
 export type {
@@ -21,6 +22,7 @@ export type {
 } from './types/events.types.ts'
 
 export type {
+  RecoveryMessage,
   InternalSocketData,
   NativeWebSocket,
   BunSocket,

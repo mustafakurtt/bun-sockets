@@ -5,6 +5,7 @@ export type {
 } from './events.types.ts'
 
 export type {
+  RecoveryMessage,
   InternalSocketData,
   NativeWebSocket,
   BunSocket,

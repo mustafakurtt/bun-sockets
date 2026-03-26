@@ -11,8 +11,10 @@ import type {
   BunSocketServer,
 } from '../types/server.types.ts'
 import type { HistoryAdapter, HistoryEntry, HistoryQuery } from '../types/history.types.ts'
-import type { InternalSocketData, NativeWebSocket } from '../types/socket.types.ts'
+import type { InternalSocketData, NativeWebSocket, RecoveryMessage } from '../types/socket.types.ts'
 import { SocketWrapper } from './socket-wrapper.ts'
+import { Namespace } from './namespace.ts'
+import { decodeBinaryFrame } from './binary.ts'
 
 const DEFAULT_HEARTBEAT: HeartbeatOptions = {
   enabled: true,
@@ -33,13 +35,6 @@ interface ResolvedServerOptions {
   perMessageDeflate: boolean
   heartbeat: HeartbeatOptions
   recovery: RecoveryOptions
-}
-
-interface RecoveryMessage {
-  seq: number
-  event: string
-  payload: unknown
-  timestamp: number
 }
 
 function resolveServerOptions(options: ServerOptions): ResolvedServerOptions {
@@ -83,6 +78,7 @@ export class SocketServer<
   private readonly roomRegistry: Map<string, Set<string>> = new Map()
   private readonly recoveryBuffers: Map<string, RecoveryMessage[]> = new Map()
   private readonly historyAdapter: HistoryAdapter | null = null
+  private readonly namespaces: Map<string, Namespace<any, any>> = new Map()
   private nativeServer: Server<InternalSocketData> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
@@ -107,25 +103,39 @@ export class SocketServer<
       open: (ws: NativeWebSocket) => {
         if (!this.nativeServer) return
 
-        const wrapper = new SocketWrapper<ClientEvents, ServerEvents>(
-          ws, this.nativeServer, this.roomRegistry,
-          this.options.recovery.enabled ? this.recoveryBuffers : null,
-          this.historyAdapter,
-        )
-        this.socketRegistry.set(ws.data.id, wrapper)
+        const ns = this.namespaces.get(ws.data.namespace)
+        if (ns) {
+          ns._setServer(this.nativeServer)
+          ns._handleOpen(ws, this.options.recovery.enabled ? this.recoveryBuffers : null)
+        } else {
+          const wrapper = new SocketWrapper<ClientEvents, ServerEvents>(
+            ws, this.nativeServer, this.roomRegistry,
+            this.options.recovery.enabled ? this.recoveryBuffers : null,
+            this.historyAdapter,
+            this.options.recovery.maxBufferSize,
+          )
+          this.socketRegistry.set(ws.data.id, wrapper)
+          for (const handler of this.connectionHandlers) handler(wrapper)
+        }
 
         if (this.options.recovery.enabled) {
           this.recoveryBuffers.set(ws.data.id, [])
         }
 
         this.startHeartbeat()
-
-        for (const handler of this.connectionHandlers) {
-          handler(wrapper)
-        }
       },
 
       message: (ws: NativeWebSocket, message: string | Buffer) => {
+        // Binary message detection
+        if (message instanceof Buffer || message instanceof ArrayBuffer) {
+          const frame = decodeBinaryFrame(message)
+          if (frame) {
+            const handler = ws.data.binaryHandlers.get(frame.event)
+            if (handler) handler(frame.payload)
+          }
+          return
+        }
+
         try {
           const raw = typeof message === 'string' ? message : message.toString()
           const { event, payload } = JSON.parse(raw) as { event: string; payload: unknown }
@@ -141,41 +151,39 @@ export class SocketServer<
           }
 
           const handler = ws.data.handlers.get(event)
-          if (handler) {
-            handler(payload)
-          }
+          if (handler) handler(payload)
         } catch {
           // Silently ignore malformed messages
         }
       },
 
       close: (ws: NativeWebSocket, code: number, reason: string) => {
-        const wrapper = this.socketRegistry.get(ws.data.id)
-        if (!wrapper) return
+        const ns = this.namespaces.get(ws.data.namespace)
+        if (ns) {
+          ns._handleClose(ws, code, reason)
+        } else {
+          const wrapper = this.socketRegistry.get(ws.data.id)
+          if (!wrapper) return
 
-        for (const room of ws.data.rooms) {
-          const members = this.roomRegistry.get(room)
-          if (members) {
-            members.delete(ws.data.id)
-            if (members.size === 0) {
-              this.roomRegistry.delete(room)
+          for (const room of ws.data.rooms) {
+            const members = this.roomRegistry.get(room)
+            if (members) {
+              members.delete(ws.data.id)
+              if (members.size === 0) this.roomRegistry.delete(room)
             }
           }
-        }
 
-        for (const handler of this.disconnectHandlers) {
-          handler(wrapper, code, reason)
+          for (const handler of this.disconnectHandlers) handler(wrapper, code, reason)
+          this.socketRegistry.delete(ws.data.id)
         }
-
-        this.socketRegistry.delete(ws.data.id)
 
         if (this.options.recovery.enabled) {
           this.scheduleRecoveryCleanup(ws.data.id)
         }
 
-        if (this.socketRegistry.size === 0) {
-          this.stopHeartbeat()
-        }
+        const totalSockets = this.socketRegistry.size +
+          [...this.namespaces.values()].reduce((sum, n) => sum + n.connectionCount, 0)
+        if (totalSockets === 0) this.stopHeartbeat()
       },
     }
   }
@@ -204,7 +212,7 @@ export class SocketServer<
         this.nativeServer.publish(room, message)
 
         if (this.historyAdapter) {
-          this.historyAdapter.store(room, event, payload)
+          try { this.historyAdapter.store(room, event, payload) } catch { /* history store failed — non-fatal */ }
         }
       },
     }
@@ -213,6 +221,17 @@ export class SocketServer<
   history(room: string, query?: HistoryQuery): HistoryEntry[] | Promise<HistoryEntry[]> {
     if (!this.historyAdapter) return []
     return this.historyAdapter.getHistory(room, query)
+  }
+
+  of<CE extends EventMap = ClientEvents, SE extends EventMap = ServerEvents>(
+    path: string,
+  ): Namespace<CE, SE> {
+    const fullPath = path.startsWith('/') ? path : `/${path}`
+    const existing = this.namespaces.get(fullPath)
+    if (existing) return existing as Namespace<CE, SE>
+    const ns = new Namespace<CE, SE>(fullPath, this.historyAdapter, this.options.recovery.maxBufferSize)
+    this.namespaces.set(fullPath, ns)
+    return ns
   }
 
   get rooms(): ReadonlyMap<string, ReadonlySet<string>> {
@@ -231,25 +250,38 @@ export class SocketServer<
     this.nativeServer = server
 
     const url = new URL(req.url)
-    if (url.pathname !== this.options.path) {
-      return undefined
+
+    // Check namespaces first
+    for (const [nsPath, ns] of this.namespaces) {
+      if (url.pathname === nsPath) {
+        ns._setServer(server)
+        const nsMws = ns._getMiddlewares()
+        if (nsMws.length === 0) {
+          const upgraded = server.upgrade(req, { data: this.createSocketData(nsPath) })
+          return upgraded ? undefined : new Response('WebSocket upgrade failed', { status: 400 })
+        }
+        return this.runMiddlewares(req, server, nsMws, nsPath)
+      }
     }
 
+    // Default namespace
+    if (url.pathname !== this.options.path) return undefined
+
     if (this.middlewares.length === 0) {
-      const upgraded = server.upgrade(req, {
-        data: this.createSocketData(),
-      })
+      const upgraded = server.upgrade(req, { data: this.createSocketData() })
       return upgraded ? undefined : new Response('WebSocket upgrade failed', { status: 400 })
     }
 
-    return this.runMiddlewares(req, server)
+    return this.runMiddlewares(req, server, this.middlewares)
   }
 
-  private createSocketData(): InternalSocketData {
+  private createSocketData(namespace = ''): InternalSocketData {
     return {
       id: crypto.randomUUID(),
+      namespace,
       rooms: new Set<string>(),
       handlers: new Map(),
+      binaryHandlers: new Map(),
       context: {},
       lastPong: Date.now(),
       seq: 0,
@@ -264,16 +296,20 @@ export class SocketServer<
 
     this.heartbeatTimer = setInterval(() => {
       const now = Date.now()
+      const ping = JSON.stringify({ event: '__system:ping', payload: now })
 
-      for (const [, wrapper] of this.socketRegistry) {
+      const checkSocket = (wrapper: SocketWrapper<any, any>) => {
         const elapsed = now - wrapper.ws.data.lastPong
-
         if (elapsed > interval + timeout) {
           wrapper.ws.close(4000, 'heartbeat timeout')
-          continue
+          return
         }
+        wrapper.ws.send(ping)
+      }
 
-        wrapper.ws.send(JSON.stringify({ event: '__system:ping', payload: now }))
+      for (const [, wrapper] of this.socketRegistry) checkSocket(wrapper)
+      for (const [, ns] of this.namespaces) {
+        for (const [, wrapper] of ns.sockets) checkSocket(wrapper as SocketWrapper<any, any>)
       }
     }, interval)
   }
@@ -315,8 +351,13 @@ export class SocketServer<
     }, maxBufferAge)
   }
 
-  private runMiddlewares(req: Request, server: Server<InternalSocketData>): Response | undefined {
-    const socketData = this.createSocketData()
+  private runMiddlewares(
+    req: Request,
+    server: Server<InternalSocketData>,
+    middlewares: MiddlewareFn[] = this.middlewares,
+    namespace = '',
+  ): Response | undefined {
+    const socketData = this.createSocketData(namespace)
     let index = 0
 
     const runNext = (context?: Record<string, unknown>): void => {
@@ -326,13 +367,12 @@ export class SocketServer<
 
       index++
 
-      if (index >= this.middlewares.length) {
-        // All middlewares passed — upgrade the connection
+      if (index >= middlewares.length) {
         server.upgrade(req, { data: socketData })
         return
       }
 
-      const nextMiddleware = this.middlewares[index]!
+      const nextMiddleware = middlewares[index]!
       try {
         const result = nextMiddleware(req, runNext)
         if (result instanceof Promise) {
@@ -345,9 +385,8 @@ export class SocketServer<
       }
     }
 
-    // Run first middleware
     try {
-      const result = this.middlewares[0]!(req, runNext)
+      const result = middlewares[0]!(req, runNext)
       if (result instanceof Promise) {
         // Async middleware: we need to handle this differently
         // Bun's fetch handler supports returning Response or undefined synchronously

@@ -6,6 +6,31 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-03-26
+
+### Added
+- **Namespace support** — `io.of('/path')` creates isolated namespaces with independent handlers, middleware, rooms, and sockets
+- **`Namespace` class** — full API: `on`, `use`, `to`, `rooms`, `sockets`, `connectionCount`, `history`
+- **Namespace-level middleware** — each namespace runs its own middleware chain independently
+- **Path-based routing** — server handler routes WebSocket upgrades to the correct namespace
+- **Binary message support** — `emitBinary(event, data)` and `onBinary(event, handler)` on both server and client
+- **Binary wire format** — `[0x01][2-byte event length][event name][binary payload]` — zero base64 overhead
+- **`BunSocket.emitBinary`** — send ArrayBuffer / Uint8Array from server to client
+- **`BunSocket.onBinary`** — receive binary data on server from client
+- **`BunSocketClient.emitBinary`** — send binary data from client to server
+- **`BunSocketClient.onBinary`** — receive binary data on client from server
+- 13 new tests — Namespace (7) + Binary (6) — 107 total, 0 fail
+
+### Changed
+- `InternalSocketData` now includes `namespace` and `binaryHandlers` fields
+- `BunSocket` interface extended with `emitBinary` and `onBinary` methods
+- `BunSocketClient` interface extended with `emitBinary` and `onBinary` methods
+- `BunSocketServer` interface extended with `of()` method
+- Server message handler detects binary frames automatically
+- Client sets `binaryType = 'arraybuffer'` for binary support
+- `SocketServer.handler` routes to namespaces before default path
+- `Namespace` class exported from barrel
+
 ## [0.4.0] — 2026-03-26
 
 ### Added

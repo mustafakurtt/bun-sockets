@@ -18,6 +18,7 @@ export interface ClientOptions {
   protocols?: string | string[]
   bufferMessages?: boolean
   maxBufferSize?: number
+  staleTimeout?: number
 }
 
 export interface ResolvedClientOptions {
@@ -28,6 +29,7 @@ export interface ResolvedClientOptions {
   protocols: string | string[]
   bufferMessages: boolean
   maxBufferSize: number
+  staleTimeout: number
 }
 
 export interface LifecycleHandlers {
@@ -71,6 +73,9 @@ export interface BunSocketClient<
     event: K,
     handler?: EventHandler<ServerEvents[K]>,
   ): this
+
+  emitBinary(event: string, data: ArrayBuffer | Uint8Array): this
+  onBinary(event: string, handler: (data: ArrayBuffer) => void | Promise<void>): this
 
   onConnect(handler: () => void): this
   onDisconnect(handler: (code: number, reason: string) => void): this
