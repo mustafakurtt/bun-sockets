@@ -1,6 +1,7 @@
 import type { Server } from 'bun'
 import type { EventMap } from './events.types.ts'
 import type { BunSocket, InternalSocketData, NativeWebSocket } from './socket.types.ts'
+import type { HistoryAdapter, HistoryEntry, HistoryQuery } from './history.types.ts'
 
 export interface HeartbeatOptions {
   enabled: boolean
@@ -21,6 +22,7 @@ export interface ServerOptions {
   perMessageDeflate?: boolean
   heartbeat?: boolean | Partial<HeartbeatOptions>
   recovery?: boolean | Partial<RecoveryOptions>
+  history?: HistoryAdapter
 }
 
 export type MiddlewareNext = (context?: Record<string, unknown>) => void
@@ -57,6 +59,8 @@ export interface BunSocketServer<
   use(middleware: MiddlewareFn): this
 
   to(room: string): RoomEmitter<ServerEvents>
+
+  history(room: string, query?: HistoryQuery): HistoryEntry[] | Promise<HistoryEntry[]>
 
   readonly rooms: ReadonlyMap<string, ReadonlySet<string>>
   readonly sockets: ReadonlyMap<string, BunSocket<ClientEvents, ServerEvents>>

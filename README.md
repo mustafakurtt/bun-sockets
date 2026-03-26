@@ -338,6 +338,72 @@ Disable recovery:
 const io = createServer({ recovery: false })
 ```
 
+### History Adapters
+
+Store room message history with pluggable adapters. Two built-in adapters: **MemoryAdapter** (in-memory, great for dev) and **SqliteAdapter** (persistent, powered by `bun:sqlite`).
+
+```typescript
+import { createServer, MemoryAdapter, SqliteAdapter } from '@mustafakurtt/bun-sockets'
+
+// In-memory (development)
+const io = createServer({
+  history: new MemoryAdapter({ maxPerRoom: 1000 }),
+})
+
+// SQLite (production — persistent, WAL mode)
+const io = createServer({
+  history: new SqliteAdapter({
+    path: './chat-history.db',  // ':memory:' for in-memory SQLite
+    maxPerRoom: 10000,
+  }),
+})
+```
+
+**Automatic storage** — messages sent via `io.to(room).emit()` and `socket.broadcast()` are automatically stored.
+
+**Query history with pagination:**
+
+```typescript
+// Latest 50 messages (default)
+const messages = await io.history('chat-room')
+
+// Paginate — get older messages
+const page1 = await io.history('chat-room', { limit: 20 })
+const page2 = await io.history('chat-room', {
+  limit: 20,
+  before: page1[page1.length - 1].timestamp,
+})
+
+// Filter by event type
+const chatOnly = await io.history('chat-room', { event: 'chat_message' })
+
+// Ascending order
+const oldest = await io.history('chat-room', { order: 'asc', limit: 10 })
+```
+
+**HistoryQuery options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `limit` | `number` | `50` | Max entries to return |
+| `before` | `number` | — | Return entries before this timestamp |
+| `after` | `number` | — | Return entries after this timestamp |
+| `order` | `'asc' \| 'desc'` | `'desc'` | Sort order by timestamp |
+| `event` | `string` | — | Filter by event name |
+
+**Custom adapter** — implement the `HistoryAdapter` interface:
+
+```typescript
+import type { HistoryAdapter } from '@mustafakurtt/bun-sockets'
+
+class RedisAdapter implements HistoryAdapter {
+  store(room, event, payload) { /* ... */ }
+  getHistory(room, query?) { /* ... */ }
+  clear(room) { /* ... */ }
+  clearAll() { /* ... */ }
+}
+```
+
 ## Client Options
 
 ```typescript
@@ -492,7 +558,7 @@ ws.send(JSON.stringify({ event: 'chat_message', payload: { text: 'Hello!' } }))
 - [x] ~~Client package~~ — auto-reconnect, backoff, event buffering, type-safe ✅
 - [x] ~~Heartbeat / ping-pong~~ — zombie socket detection and cleanup ✅
 - [x] ~~Connection State Recovery~~ — replay missed messages after reconnect ✅
-- [ ] History adapters (Memory + bun:sqlite) — room message history with pagination
+- [x] ~~History adapters (Memory + bun:sqlite)~~ — room message history with pagination ✅
 - [ ] Namespace support — multiple endpoints on one server
 - [ ] Binary message support — ArrayBuffer / Uint8Array
 

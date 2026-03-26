@@ -10,6 +10,7 @@ import type {
   RoomEmitter,
   BunSocketServer,
 } from '../types/server.types.ts'
+import type { HistoryAdapter, HistoryEntry, HistoryQuery } from '../types/history.types.ts'
 import type { InternalSocketData, NativeWebSocket } from '../types/socket.types.ts'
 import { SocketWrapper } from './socket-wrapper.ts'
 
@@ -81,6 +82,7 @@ export class SocketServer<
   private readonly socketRegistry: Map<string, SocketWrapper<ClientEvents, ServerEvents>> = new Map()
   private readonly roomRegistry: Map<string, Set<string>> = new Map()
   private readonly recoveryBuffers: Map<string, RecoveryMessage[]> = new Map()
+  private readonly historyAdapter: HistoryAdapter | null = null
   private nativeServer: Server<InternalSocketData> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
@@ -95,6 +97,7 @@ export class SocketServer<
 
   constructor(options: ServerOptions = {}) {
     this.options = resolveServerOptions(options)
+    this.historyAdapter = options.history ?? null
 
     this.websocket = {
       idleTimeout: this.options.idleTimeout,
@@ -107,6 +110,7 @@ export class SocketServer<
         const wrapper = new SocketWrapper<ClientEvents, ServerEvents>(
           ws, this.nativeServer, this.roomRegistry,
           this.options.recovery.enabled ? this.recoveryBuffers : null,
+          this.historyAdapter,
         )
         this.socketRegistry.set(ws.data.id, wrapper)
 
@@ -198,8 +202,17 @@ export class SocketServer<
         if (!this.nativeServer) return
         const message = JSON.stringify({ event, payload })
         this.nativeServer.publish(room, message)
+
+        if (this.historyAdapter) {
+          this.historyAdapter.store(room, event, payload)
+        }
       },
     }
+  }
+
+  history(room: string, query?: HistoryQuery): HistoryEntry[] | Promise<HistoryEntry[]> {
+    if (!this.historyAdapter) return []
+    return this.historyAdapter.getHistory(room, query)
   }
 
   get rooms(): ReadonlyMap<string, ReadonlySet<string>> {

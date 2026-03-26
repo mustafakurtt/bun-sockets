@@ -31,3 +31,11 @@ export type {
   BufferedMessage,
   BunSocketClient,
 } from './client.types.ts'
+
+export type {
+  HistoryEntry,
+  HistoryQuery,
+  HistoryAdapter,
+  MemoryAdapterOptions,
+  SqliteAdapterOptions,
+} from './history.types.ts'

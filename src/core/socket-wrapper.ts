@@ -1,6 +1,7 @@
 import type { Server } from 'bun'
 import type { EventMap, EventHandler } from '../types/events.types.ts'
 import type { BunSocket, NativeWebSocket, InternalSocketData } from '../types/socket.types.ts'
+import type { HistoryAdapter } from '../types/history.types.ts'
 
 interface RecoveryMessage {
   seq: number
@@ -17,17 +18,20 @@ export class SocketWrapper<
   private readonly server: Server<InternalSocketData>
   private readonly roomRegistry: Map<string, Set<string>>
   private readonly recoveryBuffers: Map<string, RecoveryMessage[]> | null
+  private readonly historyAdapter: HistoryAdapter | null
 
   constructor(
     ws: NativeWebSocket,
     server: Server<InternalSocketData>,
     roomRegistry: Map<string, Set<string>>,
     recoveryBuffers: Map<string, RecoveryMessage[]> | null = null,
+    historyAdapter: HistoryAdapter | null = null,
   ) {
     this.ws = ws
     this.server = server
     this.roomRegistry = roomRegistry
     this.recoveryBuffers = recoveryBuffers
+    this.historyAdapter = historyAdapter
   }
 
   get id(): string {
@@ -121,6 +125,11 @@ export class SocketWrapper<
   ): this {
     const message = JSON.stringify({ event, payload })
     this.server.publish(room, message)
+
+    if (this.historyAdapter) {
+      this.historyAdapter.store(room, event, payload)
+    }
+
     return this
   }
 

@@ -28,6 +28,8 @@ export type {
 
 export type {
   ServerOptions,
+  HeartbeatOptions,
+  RecoveryOptions,
   MiddlewareNext,
   MiddlewareFn,
   ConnectionHandler,
@@ -35,3 +37,15 @@ export type {
   RoomEmitter,
   BunSocketServer,
 } from './types/server.types.ts'
+
+// History adapters
+export { MemoryAdapter } from './history/memory-adapter.ts'
+export { SqliteAdapter } from './history/sqlite-adapter.ts'
+
+export type {
+  HistoryEntry,
+  HistoryQuery,
+  HistoryAdapter,
+  MemoryAdapterOptions,
+  SqliteAdapterOptions,
+} from './types/history.types.ts'

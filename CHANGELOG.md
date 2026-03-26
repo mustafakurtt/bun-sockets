@@ -6,6 +6,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-03-26
+
+### Added
+- **History Adapters** — pluggable room message history with pagination support
+- **`MemoryAdapter`** — in-memory history storage, configurable `maxPerRoom` (default: 1000)
+- **`SqliteAdapter`** — persistent history via `bun:sqlite`, WAL mode, auto-indexed, configurable `maxPerRoom` (default: 10000)
+- **`HistoryAdapter` interface** — implement `store`, `getHistory`, `clear`, `clearAll` for custom adapters (e.g. Redis)
+- **`io.history(room, query?)`** — query room history with pagination, filtering, and ordering
+- **`HistoryQuery`** — `limit`, `before`, `after`, `order`, `event` filter options
+- **Automatic history storage** — messages from `io.to(room).emit()` and `socket.broadcast()` are auto-stored
+- **`HistoryEntry`** — `{ id, room, event, payload, timestamp }` with UUID per entry
+- `MemoryAdapterOptions` and `SqliteAdapterOptions` types exported
+- 32 new integration tests — MemoryAdapter (13) + SqliteAdapter (14) + Server integration (5)
+
+### Changed
+- `ServerOptions` now accepts optional `history` adapter
+- `BunSocketServer` interface includes `history()` method
+- `SocketWrapper` receives and uses history adapter for `broadcast()` auto-storage
+- tsup config: `bun:sqlite` marked as external (Bun runtime provides it)
+
 ## [0.3.0] — 2026-03-26
 
 ### Added
