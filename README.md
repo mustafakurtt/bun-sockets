@@ -1,6 +1,6 @@
 # @mustafakurtt/bun-sockets
 
-Bun-native WebSocket server with type-safe events, rooms, middleware, and zero dependencies.
+Bun-native WebSocket server & client with type-safe events, rooms, middleware, auto-reconnect, and zero dependencies.
 
 The Socket.io DX you love, powered by Bun's native C++ WebSocket engine.
 
@@ -12,11 +12,13 @@ The Socket.io DX you love, powered by Bun's native C++ WebSocket engine.
 | | Socket.io | Raw Bun WS | **bun-sockets** |
 |--|-----------|------------|-----------------|
 | **Speed** | ❌ Engine.io overhead | ✅ Native C++ | ✅ Native C++ |
-| **Bundle size** | ~100 KB | 0 KB | **~6 KB** |
+| **Bundle size** | ~100 KB | 0 KB | **~13 KB** (server + client) |
 | **Type-safe events** | ⚠️ Manual generics | ❌ None | ✅ Built-in |
 | **Rooms** | ✅ Built-in | ❌ DIY | ✅ Built-in |
 | **Middleware** | ✅ After handshake | ❌ DIY | ✅ Before handshake |
 | **Dependencies** | 17+ packages | 0 | **0** |
+| **Auto-reconnect** | ✅ Built-in | ❌ DIY | ✅ Built-in |
+| **Event buffering** | ❌ None | ❌ None | ✅ Built-in |
 | **Bun-native** | ❌ Node.js polyfills | ✅ | ✅ |
 
 **bun-sockets** sits in the sweet spot: Socket.io's developer experience with Bun's raw performance, zero dependencies, and full TypeScript support.
@@ -60,6 +62,85 @@ Bun.serve({
 })
 
 console.log('🚀 Server running on ws://localhost:3000/ws')
+```
+
+## Client
+
+The client works in both **browser** and **Bun** environments:
+
+```typescript
+import { createClient } from '@mustafakurtt/bun-sockets/client'
+
+const socket = createClient({ url: 'ws://localhost:3000' })
+
+socket
+  .on('welcome', (payload) => {
+    console.log(payload.message) // 'Hello!'
+  })
+  .on('new_message', (payload) => {
+    console.log(`${payload.from}: ${payload.text}`)
+  })
+  .onConnect(() => console.log('Connected!'))
+  .onDisconnect((code) => console.log(`Disconnected: ${code}`))
+  .onReconnect((attempt) => console.log(`Reconnected after ${attempt} attempts`))
+  .connect()
+
+// Send events to server
+socket.emit('chat_message', { text: 'Hello everyone!' })
+```
+
+### Shared Type Safety (Server + Client)
+
+Define event contracts once, share between server and client — **full autocomplete on both sides**:
+
+```typescript
+// shared/events.ts
+export type ClientEvents = {
+  send_message: { text: string; roomId: string }
+  join_room: { roomId: string }
+}
+
+export type ServerEvents = {
+  new_message: { user: string; text: string; timestamp: number }
+  user_joined: { userId: string; roomId: string }
+}
+```
+
+```typescript
+// server.ts
+import { createServer } from '@mustafakurtt/bun-sockets'
+import type { ClientEvents, ServerEvents } from './shared/events'
+
+const io = createServer<ClientEvents, ServerEvents>()
+
+io.on('connection', (socket) => {
+  socket.on('send_message', (payload) => {
+    // ✅ payload is { text: string; roomId: string }
+    io.to(payload.roomId).emit('new_message', {
+      user: socket.id,
+      text: payload.text,
+      timestamp: Date.now(),
+    })
+  })
+})
+```
+
+```typescript
+// client.ts
+import { createClient } from '@mustafakurtt/bun-sockets/client'
+import type { ClientEvents, ServerEvents } from './shared/events'
+
+const socket = createClient<ClientEvents, ServerEvents>({
+  url: 'ws://localhost:3000'
+})
+
+socket.on('new_message', (payload) => {
+  // ✅ payload is { user: string; text: string; timestamp: number }
+  console.log(`${payload.user}: ${payload.text}`)
+})
+
+socket.emit('send_message', { text: 'Hello!', roomId: 'general' })
+// ❌ TypeScript error: socket.emit('invalid_event', {})
 ```
 
 ## Type-Safe Events
@@ -190,6 +271,67 @@ const io = createServer({
 })
 ```
 
+## Client Options
+
+```typescript
+const socket = createClient({
+  url: 'ws://localhost:3000',     // Server URL (required)
+  path: '/ws',                    // WebSocket endpoint path (default: '/ws')
+  reconnect: true,                // Enable auto-reconnect (default: true)
+  // reconnect: {                 // Or fine-tune:
+  //   maxRetries: 10,            //   Max reconnection attempts (default: 10)
+  //   baseDelay: 1000,           //   Initial delay in ms (default: 1000)
+  //   maxDelay: 30000,           //   Max delay in ms (default: 30000)
+  //   jitter: true,              //   Add randomness to prevent thundering herd (default: true)
+  // },
+  auth: { token: 'jwt-token' },   // Auth params sent as query string (default: {})
+  bufferMessages: true,           // Buffer messages sent while disconnected (default: true)
+  maxBufferSize: 100,             // Max buffered messages (default: 100)
+  protocols: [],                  // WebSocket sub-protocols (default: [])
+})
+```
+
+### Auto-Reconnect
+
+When the connection drops unexpectedly, the client automatically reconnects with **exponential backoff** and **jitter**:
+
+```
+Attempt 1: ~1000ms delay
+Attempt 2: ~2000ms delay
+Attempt 3: ~4000ms delay
+Attempt 4: ~8000ms delay
+...capped at maxDelay (30s)
+```
+
+Jitter adds ±25% randomness to each delay, preventing all clients from reconnecting at the exact same time (thundering herd problem).
+
+```typescript
+const socket = createClient({
+  url: 'ws://localhost:3000',
+  reconnect: { maxRetries: 5, baseDelay: 500 },
+})
+
+socket
+  .onReconnect((attempt) => console.log(`Reconnected on attempt ${attempt}`))
+  .onReconnectFailed(() => console.log('All reconnection attempts exhausted'))
+  .connect()
+```
+
+### Event Buffering
+
+Messages sent while disconnected are queued and **automatically flushed** when the connection is restored:
+
+```typescript
+const socket = createClient({ url: 'ws://localhost:3000' })
+
+// These are buffered — not lost
+socket.emit('message', { text: 'sent while offline 1' })
+socket.emit('message', { text: 'sent while offline 2' })
+
+socket.connect()
+// → on connect, both messages are delivered in order
+```
+
 ## API Reference
 
 ### `createServer<ClientEvents, ServerEvents>(options?)`
@@ -232,6 +374,28 @@ type MiddlewareFn = (req: Request, next: MiddlewareNext) => void | Promise<void>
 type MiddlewareNext = (context?: Record<string, unknown>) => void
 ```
 
+### `createClient<ClientEvents, ServerEvents>(options)`
+
+Creates a new WebSocket client instance.
+
+### Client (`socket`)
+
+| Method / Property | Description |
+|-------------------|-------------|
+| `socket.id` | Socket ID (null until connected) |
+| `socket.state` | `'disconnected'` \| `'connecting'` \| `'connected'` \| `'reconnecting'` |
+| `socket.connected` | `true` if currently connected |
+| `socket.connect()` | Open the WebSocket connection (fluent) |
+| `socket.disconnect(code?, reason?)` | Close the connection (fluent) |
+| `socket.emit(event, payload)` | Send event to server (fluent, buffered) |
+| `socket.on(event, handler)` | Listen for server events (fluent) |
+| `socket.off(event, handler?)` | Remove event handler(s) (fluent) |
+| `socket.onConnect(handler)` | Connection opened callback (fluent) |
+| `socket.onDisconnect(handler)` | Connection closed callback (fluent) |
+| `socket.onReconnect(handler)` | Successful reconnection callback (fluent) |
+| `socket.onReconnectFailed(handler)` | All retries exhausted callback (fluent) |
+| `socket.onError(handler)` | WebSocket error callback (fluent) |
+
 ## Wire Protocol
 
 Messages between client and server use a simple JSON protocol:
@@ -258,7 +422,7 @@ ws.send(JSON.stringify({ event: 'chat_message', payload: { text: 'Hello!' } }))
 
 ## Roadmap
 
-- [ ] Client package (`@mustafakurtt/bun-sockets/client`) — auto-reconnect, backoff, type-safe
+- [x] ~~Client package~~ — auto-reconnect, backoff, event buffering, type-safe ✅
 - [ ] Heartbeat / ping-pong — zombie socket cleanup
 - [ ] Connection State Recovery — resume missed messages after refresh
 - [ ] History adapters (Memory + bun:sqlite) — room message history with pagination

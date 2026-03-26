@@ -19,3 +19,13 @@ export type {
   RoomEmitter,
   BunSocketServer,
 } from './server.types.ts'
+
+export type {
+  ClientOptions,
+  ResolvedClientOptions,
+  ReconnectOptions,
+  ConnectionState,
+  LifecycleHandlers,
+  BufferedMessage,
+  BunSocketClient,
+} from './client.types.ts'
