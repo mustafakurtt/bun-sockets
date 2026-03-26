@@ -1,6 +1,6 @@
 import type { Server } from 'bun'
 import type { EventMap } from './events.types.ts'
-import type { BunSocket, InternalSocketData } from './socket.types.ts'
+import type { BunSocket, InternalSocketData, NativeWebSocket } from './socket.types.ts'
 
 export interface ServerOptions {
   path?: string
@@ -50,8 +50,8 @@ export interface BunSocketServer<
 
   handler: (req: Request, server: Server<InternalSocketData>) => Response | undefined
   websocket: {
-    open: (ws: any) => void
-    message: (ws: any, message: string | Buffer) => void
-    close: (ws: any, code: number, reason: string) => void
+    open: (ws: NativeWebSocket) => void
+    message: (ws: NativeWebSocket, message: string | Buffer) => void
+    close: (ws: NativeWebSocket, code: number, reason: string) => void
   }
 }

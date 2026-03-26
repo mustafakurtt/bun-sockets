@@ -1,15 +1,16 @@
 import { describe, expect, it, afterEach } from 'bun:test'
 import { createServer } from '../../src/index.ts'
 import type { Server } from 'bun'
+import type { InternalSocketData, BunSocket } from '../../src/index.ts'
 
-const servers: Server[] = []
+const servers: Server<InternalSocketData>[] = []
 let portCounter = 15000
 
 function getPort(): number {
   return portCounter++
 }
 
-function startServer(io: ReturnType<typeof createServer>, port: number): Server {
+function startServer(io: ReturnType<typeof createServer>, port: number): Server<InternalSocketData> {
   const s = Bun.serve({
     port,
     fetch: io.handler,
@@ -299,7 +300,7 @@ describe('SocketServer', () => {
     it('should clean rooms on leave', async () => {
       const port = getPort()
       const io = createServer()
-      let socketRef: any = null
+      let socketRef: BunSocket | null = null
 
       io.on('connection', (socket) => {
         socket.join('room-a').join('room-b')
@@ -310,7 +311,7 @@ describe('SocketServer', () => {
       const ws = await connectWs(port)
       await sleep(50)
 
-      socketRef.leave('room-a')
+      socketRef!.leave('room-a')
       expect(io.rooms.get('room-a')).toBeUndefined()
       expect(io.rooms.get('room-b')?.size).toBe(1)
 
@@ -321,7 +322,7 @@ describe('SocketServer', () => {
     it('should clean rooms on leaveAll', async () => {
       const port = getPort()
       const io = createServer()
-      let socketRef: any = null
+      let socketRef: BunSocket | null = null
 
       io.on('connection', (socket) => {
         socket.join('r1').join('r2').join('r3')
@@ -332,7 +333,7 @@ describe('SocketServer', () => {
       const ws = await connectWs(port)
       await sleep(50)
 
-      socketRef.leaveAll()
+      socketRef!.leaveAll()
       expect(io.rooms.size).toBe(0)
 
       ws.close()
