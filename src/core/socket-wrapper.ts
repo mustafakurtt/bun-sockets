@@ -2,22 +2,32 @@ import type { Server } from 'bun'
 import type { EventMap, EventHandler } from '../types/events.types.ts'
 import type { BunSocket, NativeWebSocket, InternalSocketData } from '../types/socket.types.ts'
 
+interface RecoveryMessage {
+  seq: number
+  event: string
+  payload: unknown
+  timestamp: number
+}
+
 export class SocketWrapper<
   ClientEvents extends EventMap = EventMap,
   ServerEvents extends EventMap = EventMap,
 > implements BunSocket<ClientEvents, ServerEvents> {
-  private readonly ws: NativeWebSocket
+  readonly ws: NativeWebSocket
   private readonly server: Server<InternalSocketData>
   private readonly roomRegistry: Map<string, Set<string>>
+  private readonly recoveryBuffers: Map<string, RecoveryMessage[]> | null
 
   constructor(
     ws: NativeWebSocket,
     server: Server<InternalSocketData>,
     roomRegistry: Map<string, Set<string>>,
+    recoveryBuffers: Map<string, RecoveryMessage[]> | null = null,
   ) {
     this.ws = ws
     this.server = server
     this.roomRegistry = roomRegistry
+    this.recoveryBuffers = recoveryBuffers
   }
 
   get id(): string {
@@ -81,7 +91,18 @@ export class SocketWrapper<
     event: K,
     payload: ServerEvents[K],
   ): this {
-    this.ws.send(JSON.stringify({ event, payload }))
+    this.ws.data.seq++
+    const seq = this.ws.data.seq
+
+    this.ws.send(JSON.stringify({ event, payload, seq }))
+
+    if (this.recoveryBuffers) {
+      const buffer = this.recoveryBuffers.get(this.ws.data.id)
+      if (buffer) {
+        buffer.push({ seq, event, payload, timestamp: Date.now() })
+      }
+    }
+
     return this
   }
 

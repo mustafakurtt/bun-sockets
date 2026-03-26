@@ -61,6 +61,9 @@ export class SocketClient<
   }
 
   private socketId: string | null = null
+  private previousSocketId: string | null = null
+  private lastSeq = 0
+  private staleTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: ClientOptions) {
     this.options = resolveOptions(options)
@@ -91,6 +94,7 @@ export class SocketClient<
   disconnect(code = 1000, reason = 'client disconnect'): this {
     this.intentionalClose = true
     this.clearReconnectTimer()
+    this.clearStaleTimer()
     this.reconnectAttempt = 0
 
     if (this.ws) {
@@ -192,6 +196,13 @@ export class SocketClient<
       this.currentState = 'connected'
 
       if (isReconnect) {
+        if (this.previousSocketId && this.lastSeq > 0) {
+          this.ws!.send(JSON.stringify({
+            event: '__system:recover',
+            payload: { socketId: this.previousSocketId, lastSeq: this.lastSeq },
+          }))
+        }
+
         for (const handler of this.lifecycle.reconnect) {
           handler(this.reconnectAttempt)
         }
@@ -208,11 +219,31 @@ export class SocketClient<
 
     this.ws.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data as string) as { event: string; payload: unknown }
+        const data = JSON.parse(event.data as string) as { event: string; payload: unknown; seq?: number }
+
+        if (data.event === '__system:ping') {
+          this.resetStaleTimer()
+          if (this.ws) {
+            this.ws.send(JSON.stringify({ event: '__system:pong', payload: data.payload }))
+          }
+          return
+        }
 
         if (data.event === '__system:id') {
           this.socketId = data.payload as string
           return
+        }
+
+        if (data.event === '__system:recovery_complete') {
+          return
+        }
+
+        if (data.event === '__system:recovery_failed') {
+          return
+        }
+
+        if (data.seq !== undefined) {
+          this.lastSeq = data.seq
         }
 
         const handlers = this.eventHandlers.get(data.event)
@@ -227,7 +258,9 @@ export class SocketClient<
     }
 
     this.ws.onclose = (event: CloseEvent) => {
+      this.previousSocketId = this.socketId
       this.ws = null
+      this.clearStaleTimer()
 
       for (const handler of this.lifecycle.disconnect) {
         handler(event.code, event.reason)
@@ -338,6 +371,23 @@ export class SocketClient<
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
+    }
+  }
+
+  private resetStaleTimer(): void {
+    this.clearStaleTimer()
+    // If no ping received for 2x the expected interval, consider stale
+    this.staleTimer = setTimeout(() => {
+      if (this.connected && !this.intentionalClose) {
+        this.ws?.close(4001, 'stale connection')
+      }
+    }, 70000)
+  }
+
+  private clearStaleTimer(): void {
+    if (this.staleTimer) {
+      clearTimeout(this.staleTimer)
+      this.staleTimer = null
     }
   }
 

@@ -2,6 +2,8 @@ import type { Server } from 'bun'
 import type { EventMap } from '../types/events.types.ts'
 import type {
   ServerOptions,
+  HeartbeatOptions,
+  RecoveryOptions,
   MiddlewareFn,
   ConnectionHandler,
   DisconnectHandler,
@@ -11,24 +13,76 @@ import type {
 import type { InternalSocketData, NativeWebSocket } from '../types/socket.types.ts'
 import { SocketWrapper } from './socket-wrapper.ts'
 
-const DEFAULT_OPTIONS: Required<ServerOptions> = {
-  path: '/ws',
-  idleTimeout: 120,
-  maxPayloadLength: 16 * 1024 * 1024,
-  perMessageDeflate: false,
+const DEFAULT_HEARTBEAT: HeartbeatOptions = {
+  enabled: true,
+  interval: 25000,
+  timeout: 10000,
+}
+
+const DEFAULT_RECOVERY: RecoveryOptions = {
+  enabled: true,
+  maxBufferSize: 100,
+  maxBufferAge: 30000,
+}
+
+interface ResolvedServerOptions {
+  path: string
+  idleTimeout: number
+  maxPayloadLength: number
+  perMessageDeflate: boolean
+  heartbeat: HeartbeatOptions
+  recovery: RecoveryOptions
+}
+
+interface RecoveryMessage {
+  seq: number
+  event: string
+  payload: unknown
+  timestamp: number
+}
+
+function resolveServerOptions(options: ServerOptions): ResolvedServerOptions {
+  let heartbeat: HeartbeatOptions
+  if (options.heartbeat === false) {
+    heartbeat = { ...DEFAULT_HEARTBEAT, enabled: false }
+  } else if (options.heartbeat === true || options.heartbeat === undefined) {
+    heartbeat = { ...DEFAULT_HEARTBEAT }
+  } else {
+    heartbeat = { ...DEFAULT_HEARTBEAT, ...options.heartbeat, enabled: true }
+  }
+
+  let recovery: RecoveryOptions
+  if (options.recovery === false) {
+    recovery = { ...DEFAULT_RECOVERY, enabled: false }
+  } else if (options.recovery === true || options.recovery === undefined) {
+    recovery = { ...DEFAULT_RECOVERY }
+  } else {
+    recovery = { ...DEFAULT_RECOVERY, ...options.recovery, enabled: true }
+  }
+
+  return {
+    path: options.path ?? '/ws',
+    idleTimeout: options.idleTimeout ?? 120,
+    maxPayloadLength: options.maxPayloadLength ?? (16 * 1024 * 1024),
+    perMessageDeflate: options.perMessageDeflate ?? false,
+    heartbeat,
+    recovery,
+  }
 }
 
 export class SocketServer<
   ClientEvents extends EventMap = EventMap,
   ServerEvents extends EventMap = EventMap,
 > implements BunSocketServer<ClientEvents, ServerEvents> {
-  private readonly options: Required<ServerOptions>
+  private readonly options: ResolvedServerOptions
   private readonly middlewares: MiddlewareFn[] = []
   private readonly connectionHandlers: Set<ConnectionHandler<ClientEvents, ServerEvents>> = new Set()
   private readonly disconnectHandlers: Set<DisconnectHandler<ClientEvents, ServerEvents>> = new Set()
   private readonly socketRegistry: Map<string, SocketWrapper<ClientEvents, ServerEvents>> = new Map()
   private readonly roomRegistry: Map<string, Set<string>> = new Map()
+  private readonly recoveryBuffers: Map<string, RecoveryMessage[]> = new Map()
   private nativeServer: Server<InternalSocketData> | null = null
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
   readonly websocket: {
     idleTimeout: number
@@ -40,7 +94,7 @@ export class SocketServer<
   }
 
   constructor(options: ServerOptions = {}) {
-    this.options = { ...DEFAULT_OPTIONS, ...options }
+    this.options = resolveServerOptions(options)
 
     this.websocket = {
       idleTimeout: this.options.idleTimeout,
@@ -50,8 +104,17 @@ export class SocketServer<
       open: (ws: NativeWebSocket) => {
         if (!this.nativeServer) return
 
-        const wrapper = new SocketWrapper<ClientEvents, ServerEvents>(ws, this.nativeServer, this.roomRegistry)
+        const wrapper = new SocketWrapper<ClientEvents, ServerEvents>(
+          ws, this.nativeServer, this.roomRegistry,
+          this.options.recovery.enabled ? this.recoveryBuffers : null,
+        )
         this.socketRegistry.set(ws.data.id, wrapper)
+
+        if (this.options.recovery.enabled) {
+          this.recoveryBuffers.set(ws.data.id, [])
+        }
+
+        this.startHeartbeat()
 
         for (const handler of this.connectionHandlers) {
           handler(wrapper)
@@ -62,6 +125,16 @@ export class SocketServer<
         try {
           const raw = typeof message === 'string' ? message : message.toString()
           const { event, payload } = JSON.parse(raw) as { event: string; payload: unknown }
+
+          if (event === '__system:pong') {
+            ws.data.lastPong = Date.now()
+            return
+          }
+
+          if (event === '__system:recover') {
+            this.handleRecoveryRequest(ws, payload as { socketId: string; lastSeq: number })
+            return
+          }
 
           const handler = ws.data.handlers.get(event)
           if (handler) {
@@ -91,6 +164,14 @@ export class SocketServer<
         }
 
         this.socketRegistry.delete(ws.data.id)
+
+        if (this.options.recovery.enabled) {
+          this.scheduleRecoveryCleanup(ws.data.id)
+        }
+
+        if (this.socketRegistry.size === 0) {
+          this.stopHeartbeat()
+        }
       },
     }
   }
@@ -157,7 +238,68 @@ export class SocketServer<
       rooms: new Set<string>(),
       handlers: new Map(),
       context: {},
+      lastPong: Date.now(),
+      seq: 0,
     }
+  }
+
+  private startHeartbeat(): void {
+    if (!this.options.heartbeat.enabled) return
+    if (this.heartbeatTimer) return
+
+    const { interval, timeout } = this.options.heartbeat
+
+    this.heartbeatTimer = setInterval(() => {
+      const now = Date.now()
+
+      for (const [, wrapper] of this.socketRegistry) {
+        const elapsed = now - wrapper.ws.data.lastPong
+
+        if (elapsed > interval + timeout) {
+          wrapper.ws.close(4000, 'heartbeat timeout')
+          continue
+        }
+
+        wrapper.ws.send(JSON.stringify({ event: '__system:ping', payload: now }))
+      }
+    }, interval)
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+  }
+
+  private handleRecoveryRequest(ws: NativeWebSocket, data: { socketId: string; lastSeq: number }): void {
+    if (!this.options.recovery.enabled) return
+
+    const buffer = this.recoveryBuffers.get(data.socketId)
+    if (!buffer) {
+      ws.send(JSON.stringify({ event: '__system:recovery_failed', payload: { reason: 'no_buffer' } }))
+      return
+    }
+
+    const missed = buffer.filter((msg) => msg.seq > data.lastSeq)
+
+    for (const msg of missed) {
+      ws.send(JSON.stringify({ event: msg.event, payload: msg.payload, seq: msg.seq }))
+    }
+
+    ws.send(JSON.stringify({ event: '__system:recovery_complete', payload: { recovered: missed.length } }))
+
+    // Transfer buffer to new socket id
+    this.recoveryBuffers.delete(data.socketId)
+    this.recoveryBuffers.set(ws.data.id, buffer)
+  }
+
+  private scheduleRecoveryCleanup(socketId: string): void {
+    const { maxBufferAge } = this.options.recovery
+
+    setTimeout(() => {
+      this.recoveryBuffers.delete(socketId)
+    }, maxBufferAge)
   }
 
   private runMiddlewares(req: Request, server: Server<InternalSocketData>): Response | undefined {

@@ -12,6 +12,8 @@ export type {
 
 export type {
   ServerOptions,
+  HeartbeatOptions,
+  RecoveryOptions,
   MiddlewareNext,
   MiddlewareFn,
   ConnectionHandler,

@@ -6,6 +6,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-03-26
+
+### Added
+- **Heartbeat / Ping-Pong** — server sends periodic `__system:ping`, detects and closes zombie sockets
+- **`heartbeat`** option — `{ interval: 25000, timeout: 10000 }` defaults, fully configurable or `false` to disable
+- **Client auto-pong** — client automatically responds to `__system:ping` with `__system:pong`
+- **Stale connection detection** — client closes connection if no pings received for extended period, triggers reconnect
+- **Connection State Recovery** — server buffers outgoing messages with sequence numbers per socket
+- **`recovery`** option — `{ maxBufferSize: 100, maxBufferAge: 30000 }` defaults, configurable or `false` to disable
+- **Automatic recovery on reconnect** — client sends `__system:recover` with `lastSeq`, server replays missed messages
+- **`__system:recovery_complete`** — server notifies client when replay is done
+- **`__system:recovery_failed`** — server notifies when buffer expired or not found
+- **Buffer auto-cleanup** — recovery buffers are automatically purged after `maxBufferAge` post-disconnect
+- **`seq` field** on all emitted messages — monotonically increasing per socket
+- `HeartbeatOptions` and `RecoveryOptions` types exported
+- 11 new integration tests — heartbeat (5) + recovery (6)
+
+### Changed
+- `InternalSocketData` now includes `lastPong` and `seq` fields
+- `SocketWrapper.ws` is now `readonly` (public) for internal heartbeat access
+- `SocketWrapper.emit()` now increments `seq` and writes to recovery buffer when enabled
+- Server defaults: heartbeat and recovery are **enabled by default** — zero-config for most use cases
+
 ## [0.2.0] — 2026-03-26
 
 ### Added

@@ -6,6 +6,8 @@ export interface InternalSocketData {
   rooms: Set<string>
   handlers: Map<string, EventHandler>
   context: Record<string, unknown>
+  lastPong: number
+  seq: number
 }
 
 export type NativeWebSocket = ServerWebSocket<InternalSocketData>

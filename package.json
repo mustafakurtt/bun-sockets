@@ -1,6 +1,6 @@
 {
   "name": "@mustafakurtt/bun-sockets",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Bun-native WebSocket server with type-safe events, rooms, middleware, and zero dependencies. The Socket.io DX you love, powered by Bun's native speed.",
   "type": "module",
   "main": "./dist/index.cjs",

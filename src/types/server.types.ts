@@ -2,11 +2,25 @@ import type { Server } from 'bun'
 import type { EventMap } from './events.types.ts'
 import type { BunSocket, InternalSocketData, NativeWebSocket } from './socket.types.ts'
 
+export interface HeartbeatOptions {
+  enabled: boolean
+  interval: number
+  timeout: number
+}
+
+export interface RecoveryOptions {
+  enabled: boolean
+  maxBufferSize: number
+  maxBufferAge: number
+}
+
 export interface ServerOptions {
   path?: string
   idleTimeout?: number
   maxPayloadLength?: number
   perMessageDeflate?: boolean
+  heartbeat?: boolean | Partial<HeartbeatOptions>
+  recovery?: boolean | Partial<RecoveryOptions>
 }
 
 export type MiddlewareNext = (context?: Record<string, unknown>) => void

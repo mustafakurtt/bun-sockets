@@ -268,7 +268,74 @@ const io = createServer({
   idleTimeout: 120,               // Seconds before idle socket is dropped (default: 120)
   maxPayloadLength: 16 * 1024 * 1024, // Max message size in bytes (default: 16 MB)
   perMessageDeflate: false,       // Enable compression (default: false)
+  heartbeat: true,                // Enable heartbeat (default: true)
+  // heartbeat: {                 // Or fine-tune:
+  //   interval: 25000,           //   Ping interval in ms (default: 25000)
+  //   timeout: 10000,            //   Max wait for pong before close (default: 10000)
+  // },
+  recovery: true,                 // Enable connection state recovery (default: true)
+  // recovery: {                  // Or fine-tune:
+  //   maxBufferSize: 100,        //   Messages to keep per socket (default: 100)
+  //   maxBufferAge: 30000,       //   Buffer TTL after disconnect in ms (default: 30000)
+  // },
 })
+```
+
+### Heartbeat / Ping-Pong
+
+The server automatically sends `__system:ping` messages to all connected sockets at the configured interval. The client **automatically responds** with `__system:pong`. If a socket fails to respond within the timeout window, the server closes it with code `4000` (heartbeat timeout).
+
+```
+Server ──[__system:ping]──▶ Client
+Server ◀──[__system:pong]── Client   ✅ alive
+
+Server ──[__system:ping]──▶ Client
+         ... no pong ...             ❌ close(4000)
+```
+
+The client also detects stale connections: if no ping is received for an extended period, it closes the connection and triggers auto-reconnect.
+
+```typescript
+const io = createServer({
+  heartbeat: {
+    interval: 15000,   // Send ping every 15s
+    timeout: 5000,     // Allow 5s for pong response
+  },
+})
+```
+
+Disable heartbeat entirely:
+```typescript
+const io = createServer({ heartbeat: false })
+```
+
+### Connection State Recovery
+
+When a client disconnects and reconnects, the server can **replay missed messages** automatically. Each emitted message carries a sequence number (`seq`). On reconnect, the client sends its last known `seq` and the server replays everything after it.
+
+```
+1. Client receives messages with seq: 1, 2, 3
+2. Connection drops at seq 3
+3. Server continues buffering: seq 4, 5
+4. Client reconnects → sends __system:recover { lastSeq: 3 }
+5. Server replays seq 4, 5 → sends __system:recovery_complete
+```
+
+This is **fully automatic** when both heartbeat and recovery are enabled (the defaults). No code changes needed.
+
+```typescript
+// Fine-tune recovery buffer
+const io = createServer({
+  recovery: {
+    maxBufferSize: 200,    // Keep last 200 messages per socket
+    maxBufferAge: 60000,   // Keep buffer for 60s after disconnect
+  },
+})
+```
+
+Disable recovery:
+```typescript
+const io = createServer({ recovery: false })
 ```
 
 ## Client Options
@@ -423,8 +490,8 @@ ws.send(JSON.stringify({ event: 'chat_message', payload: { text: 'Hello!' } }))
 ## Roadmap
 
 - [x] ~~Client package~~ — auto-reconnect, backoff, event buffering, type-safe ✅
-- [ ] Heartbeat / ping-pong — zombie socket cleanup
-- [ ] Connection State Recovery — resume missed messages after refresh
+- [x] ~~Heartbeat / ping-pong~~ — zombie socket detection and cleanup ✅
+- [x] ~~Connection State Recovery~~ — replay missed messages after reconnect ✅
 - [ ] History adapters (Memory + bun:sqlite) — room message history with pagination
 - [ ] Namespace support — multiple endpoints on one server
 - [ ] Binary message support — ArrayBuffer / Uint8Array
